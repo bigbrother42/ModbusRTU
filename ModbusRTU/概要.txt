@@ -1,0 +1,59 @@
+【运行逻辑】
+1. 点击连接
+2. Scheduler 后台启动，负责串口连接、重连、请求调度
+3. Poller 每100ms生成一次采集请求
+4. 请求执行后，PlcData进入BlockingCollection
+5. 消费线程从BlockingCollection取数据，更新最新缓存
+6. UI Timer 每500ms从最新缓存取快照
+7. DataGridView只每500ms刷新一次
+
+这个版本才完整覆盖了：
+请求队列
+优先级调度
+多设备轮询
+自动重连
+BlockingCollection限长缓冲
+满队列丢旧数据
+最新值缓存
+100ms采集
+500ms UI刷新
+BindingList刷新DataGridView
+
+还可以补充一下几块：
+1. 防止重复点击连接
+   当前多次点连接可能重复启动线程、Timer、Scheduler。建议连接前先 StopAll()，并禁用连接按钮。
+2. 请求队列也要限长
+   现在 PlcDataBuffer 限长了，但 ModbusRequestQueue 没限长。设备异常时，Poller 仍可能不断塞采集请求，导致队列堆积。
+   建议低优先级轮询请求队列满时丢弃，高优先级控制命令保留。
+3. UI 刷新要只更新变化值
+   现在每 500ms 都给属性赋值。可以比较新旧值，不变就不赋，减少 PropertyChanged。
+4. 日志不要无限追加
+   txtLog.AppendText 时间久了会很卡。建议最多保留 500～1000 行，或者写入 log 文件。
+5. 连接状态/设备状态区分
+   现在只有串口连接状态。实际还要区分：
+    串口已连接
+    设备在线
+    设备超时
+    设备报警
+   因为串口打开成功 ≠ PLC 一定在线。
+6. 增加设备离线判断
+   某个 SlaveId 连续几次读失败，应标记该设备离线，而不是只按全局失败次数断开整个串口。
+7. 异常分类
+   建议区分：
+    TimeoutException：设备无响应
+    UnauthorizedAccessException：串口被占用
+    IOException：串口断开
+    InvalidOperationException：未连接
+8. 关闭时等待后台线程退出
+   当前 Cancel() 后没有等待 Task 结束，严格来说可以保存 Task 引用，然后 Wait 一下，避免关闭时还有后台任务跑。
+9. 寄存器地址、倍率、大小端做成配置
+   不要硬编码：
+    regs[1] / 10.0
+    regs[2] / 100.0
+   实际项目最好放配置表/JSON/数据库。
+10. 增加通信统计
+     成功次数
+     失败次数
+     平均耗时
+     当前队列长度
+     最后通信时间
