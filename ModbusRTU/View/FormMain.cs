@@ -123,7 +123,7 @@ namespace ModbusRTU.View
             // 停止Poller并等待
             if (_poller != null)
             {
-                await _poller.Stop(waitForExit: true, 2000);
+                await _poller.StopAsync(waitForExit: true, 2000);
                 _poller = null;
             }
 
@@ -131,11 +131,9 @@ namespace ModbusRTU.View
             _bufferConsumeCts?.Cancel();
             if (_bufferConsumeTask != null)
             {
-                Task completed = Task.WhenAny(_bufferConsumeTask, Task.Delay(2000));
-                if (completed != _bufferConsumeTask)
-                {
+                var finished = await Task.WhenAny(_bufferConsumeTask, Task.Delay(2000)).ConfigureAwait(false);
+                if (finished != _bufferConsumeTask)
                     AppendLogSafe("Consume Buffer停止超时！");
-                }
             }
 
             _bufferConsumeTask = null;
@@ -147,7 +145,7 @@ namespace ModbusRTU.View
             {
                 _scheduler.Log -= AppendLogSafe;
                 _scheduler.ConnectionChanged -= OnConnectionChanged;
-                await _scheduler.StopAsync(3000);
+                await _scheduler.StopAsync(3000).ConfigureAwait(false);
                 _scheduler.Dispose();
                 _scheduler = null;
             }
@@ -215,7 +213,7 @@ namespace ModbusRTU.View
 
                 _scheduler.Start();
                 StartBufferConsumer();
-                _poller.Start();
+                await _poller.StartAsync().ConfigureAwait(true);
                 StartUiTimer();
 
                 // _sessionRunning为真时，禁用【链接】按钮等，启用【断开】、与设温按钮
@@ -348,6 +346,12 @@ namespace ModbusRTU.View
                     return;
                 }
 
+                if (_scheduler == null || !_sessionRunning)
+                {
+                    AppendLogSafe("未连接，无法设置温度。");
+                    return;
+                }
+
                 double temp = double.Parse(txtTargetTemp.Text);
 
                 _scheduler.Enqueue(new ModbusRequest
@@ -432,7 +436,7 @@ namespace ModbusRTU.View
 
                     await StopSession();
                 }
-                catch (Exception ex)
+                catch
                 {
 
                 }

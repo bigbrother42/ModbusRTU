@@ -1,8 +1,6 @@
-using ModbusRTU.Communication.Base;
 using ModbusRTU.Communication.Base.Serial;
 using ModbusRTU.Constants;
 using ModbusRTU.Model;
-using ModbusRTU.Util;
 using System;
 using System.Threading;
 using System.Threading.Tasks;

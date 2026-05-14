@@ -30,16 +30,22 @@ namespace ModbusRTU.Service
             _buffer = buffer;
         }
 
-        public void Start()
+        public async Task StartAsync()
         {
-            Stop(waitForExit: true);
+            await StopAsync(waitForExit: true, 3000).ConfigureAwait(false);
 
             _cts = new CancellationTokenSource();
             var token = _cts.Token;
             _pollTask = Task.Run(() => PollLoopAsync(token));
         }
 
-        public async Task Stop(bool waitForExit = true, int timeoutMs = 2000)
+        /// <summary>兼容旧调用；内部会等待上一次轮询停止。</summary>
+        public void Start()
+        {
+            StartAsync().GetAwaiter().GetResult();
+        }
+
+        public async Task StopAsync(bool waitForExit = true, int timeoutMs = 2000)
         {
             _cts?.Cancel();
 
@@ -48,7 +54,7 @@ namespace ModbusRTU.Service
                 Task completed = await Task.WhenAny(_pollTask, Task.Delay(timeoutMs));
                 if (completed != _pollTask)
                 {
-                    
+                    // 超时：轮询任务可能仍会因 CancellationToken 在后续退出
                 }
             }
 

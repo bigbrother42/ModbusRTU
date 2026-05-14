@@ -1,3 +1,4 @@
+using ModbusRTU.Constants;
 using System;
 using System.Collections.Generic;
 
@@ -31,7 +32,7 @@ namespace ModbusRTU.Communication.Base
             {
                 while (_requests.Count >= _maxLength)
                 {
-                    var victim = FindLowestPriorityOldest();
+                    var victim = FindEvictionVictim();
                     if (victim == null) break;
 
                     _requests.Remove(victim);
@@ -48,23 +49,35 @@ namespace ModbusRTU.Communication.Base
             }
         }
 
-        private ModbusRequest FindLowestPriorityOldest()
+        /// <summary>
+        /// 为腾出队列空间选择丢弃对象：优先丢 Low，其次 Normal、High；仅当队列中全是 Critical 时才丢最旧的 Critical。
+        /// </summary>
+        private ModbusRequest FindEvictionVictim()
         {
-            ModbusRequest best = null;
+            foreach (var p in new[] { ModbusPriority.Low, ModbusPriority.Normal, ModbusPriority.High })
+            {
+                ModbusRequest oldest = null;
+                foreach (var r in _requests)
+                {
+                    if (r.Priority != p)
+                        continue;
+                    if (oldest == null || r.CreateTime < oldest.CreateTime)
+                        oldest = r;
+                }
+                if (oldest != null)
+                    return oldest;
+            }
+
+            ModbusRequest oldestCritical = null;
             foreach (var r in _requests)
             {
-                if (r.Priority == Constants.ModbusPriority.Critical) continue;
-                if (r.Priority == Constants.ModbusPriority.High) continue;
-                if (r.Priority == Constants.ModbusPriority.Normal) continue;
-
-                if (best == null
-                    || r.Priority < best.Priority
-                    || (r.Priority == best.Priority && r.CreateTime < best.CreateTime))
-                {
-                    best = r;
-                }
+                if (r.Priority != ModbusPriority.Critical)
+                    continue;
+                if (oldestCritical == null || r.CreateTime < oldestCritical.CreateTime)
+                    oldestCritical = r;
             }
-            return best;
+
+            return oldestCritical;
         }
 
         public bool TryDequeue(out ModbusRequest request)
