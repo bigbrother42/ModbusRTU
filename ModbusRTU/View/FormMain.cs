@@ -3,7 +3,6 @@ using ModbusRTU.Communication.Base.Serial;
 using ModbusRTU.Constants;
 using ModbusRTU.Model;
 using ModbusRTU.Service;
-using NModbus;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -38,6 +37,9 @@ namespace ModbusRTU.View
         private bool _sessionRunning;
         private bool _isClosing;
 
+        /// <summary>防止连接流程被重复点击重叠执行（容量 1）。</summary>
+        private readonly SemaphoreSlim _connectGate = new SemaphoreSlim(1, 1);
+
         public FormMain()
         {
             InitializeComponent();
@@ -65,7 +67,7 @@ namespace ModbusRTU.View
             txtSlaveId.Text = "1";
             txtTargetTemp.Text = "25.0";
 
-            UpdateConnectionButtons();
+            UpdateConnectionButtons(false);
         }
 
         private void InitGrid()
@@ -74,19 +76,19 @@ namespace ModbusRTU.View
             dataGridView.DataSource = _plcDataList;
         }
 
-        private void UpdateConnectionButtons()
+        private void UpdateConnectionButtons(bool sessionRunning)
         {
-            btnConnect.Enabled = !_sessionRunning;
-            btnDisconnect.Enabled = _sessionRunning;
-            cmbPort.Enabled = !_sessionRunning;
-            cmbBaudRate.Enabled = !_sessionRunning;
-            txtSlaveId.Enabled = !_sessionRunning;
+            btnConnect.Enabled = !sessionRunning;
+            btnDisconnect.Enabled = sessionRunning;
+            cmbPort.Enabled = !sessionRunning;
+            cmbBaudRate.Enabled = !sessionRunning;
+            txtSlaveId.Enabled = !sessionRunning;
 
-            btnStart.Enabled = _sessionRunning;
-            btnStop.Enabled = _sessionRunning;
-            btnSetTemp.Enabled = _sessionRunning;
+            btnStart.Enabled = sessionRunning;
+            btnStop.Enabled = sessionRunning;
+            btnSetTemp.Enabled = sessionRunning;
 
-            if (!_sessionRunning)
+            if (!sessionRunning)
                 lblConnectionStatus.Text = "断开";
         }
 
@@ -150,82 +152,97 @@ namespace ModbusRTU.View
                 _scheduler = null;
             }
 
+            // 未挂到 Scheduler 的失败路径（例如 new ModbusScheduler 前抛错）
+            _transport?.Dispose();
             _transport = null;
             _deviceService = null;
 
             // 更新_sessionRunning和按钮状态
             if (InvokeRequired)
-                BeginInvoke(new Action(UpdateConnectionButtons));
+                BeginInvoke(new Action(() => UpdateConnectionButtons(false)));
             else
-                UpdateConnectionButtons();
+                UpdateConnectionButtons(false);
         }
 
         private async void btnConnect_Click(object sender, EventArgs e)
         {
-            if (_sessionRunning)
+            if (!await _connectGate.WaitAsync(0).ConfigureAwait(true))
             {
-                AppendLogSafe("会话已在运行，请先断开。");
-                return;
-            }
-
-            if (string.IsNullOrWhiteSpace(cmbPort.Text))
-            {
-                AppendLogSafe("请选择串口。");
-                return;
-            }
-
-            if (!TryParseSlaveId(out byte slaveId))
-            {
-                AppendLogSafe("SlaveId 无效，请输入 1～247。");
-                return;
-            }
-
-            if (!TryGetSelectedBaudRate(out int baudRate))
-            {
-                AppendLogSafe("波特率无效。");
+                AppendLogSafe("正在连接中，请稍候…");
                 return;
             }
 
             try
             {
-                // 避免重复链接遗留后台任务
-                await StopSession();
-
-                _transport = new ModbusRtuTransport(
-                    portName: cmbPort.Text.Trim(),
-                    baudRate: baudRate,
-                    parity: Parity.None,
-                    dataBits: 8,
-                    stopBits: StopBits.One);
-
-                _scheduler = new ModbusScheduler(_transport);
-                _scheduler.Log += AppendLogSafe;
-                _scheduler.ConnectionChanged += OnConnectionChanged;
-
-                _deviceService = new PlcService(_transport);
-
-                var devices = new List<DeviceConfig>
+                if (_sessionRunning)
                 {
-                    new DeviceConfig { Name = $"PLC-{slaveId}", SlaveId = slaveId, PollIntervalMs = 100 },
-                };
+                    AppendLogSafe("会话已在运行，请先断开。");
+                    return;
+                }
 
-                _poller = new MultiDevicePoller(devices, _scheduler, _deviceService, _buffer);
+                if (string.IsNullOrWhiteSpace(cmbPort.Text))
+                {
+                    AppendLogSafe("请选择串口。");
+                    return;
+                }
 
-                _scheduler.Start();
-                StartBufferConsumer();
-                await _poller.StartAsync().ConfigureAwait(true);
-                StartUiTimer();
+                if (!TryParseSlaveId(out byte slaveId))
+                {
+                    AppendLogSafe("SlaveId 无效，请输入 1～247。");
+                    return;
+                }
 
-                // _sessionRunning为真时，禁用【链接】按钮等，启用【断开】、与设温按钮
-                _sessionRunning = true;
-                UpdateConnectionButtons();
+                if (!TryGetSelectedBaudRate(out int baudRate))
+                {
+                    AppendLogSafe("波特率无效。");
+                    return;
+                }
 
-                AppendLogSafe("系统启动成功");
+                try
+                {
+                    // 避免重复链接遗留后台任务
+                    await StopSession();
+
+                    _transport = new ModbusRtuTransport(
+                        portName: cmbPort.Text.Trim(),
+                        baudRate: baudRate,
+                        parity: Parity.None,
+                        dataBits: 8,
+                        stopBits: StopBits.One);
+
+                    _scheduler = new ModbusScheduler(_transport);
+                    _scheduler.Log += AppendLogSafe;
+                    _scheduler.ConnectionChanged += OnConnectionChanged;
+
+                    _deviceService = new PlcService(_transport);
+
+                    var devices = new List<DeviceConfig>
+                    {
+                        new DeviceConfig { Name = $"PLC-{slaveId}", SlaveId = slaveId, PollIntervalMs = 100 },
+                    };
+
+                    _poller = new MultiDevicePoller(devices, _scheduler, _deviceService, _buffer);
+
+                    _scheduler.Start();
+                    StartBufferConsumer();
+                    await _poller.StartAsync().ConfigureAwait(true);
+                    StartUiTimer();
+
+                    // _sessionRunning为真时，禁用【链接】按钮等，启用【断开】、与设温按钮
+                    _sessionRunning = true;
+                    UpdateConnectionButtons(true);
+
+                    AppendLogSafe("系统启动成功");
+                }
+                catch (Exception ex)
+                {
+                    await StopSession();
+                    AppendLogSafe("连接失败：" + ex.Message);
+                }
             }
-            catch (Exception ex)
+            finally
             {
-                await StopSession();
-                AppendLogSafe("连接失败：" + ex.Message);
+                _connectGate.Release();
             }
         }
 
@@ -436,9 +453,9 @@ namespace ModbusRTU.View
 
                     await StopSession();
                 }
-                catch
+                catch(Exception ex)
                 {
-
+                    MessageBox.Show(ex.Message);
                 }
                 finally
                 {
@@ -450,6 +467,20 @@ namespace ModbusRTU.View
             }
 
             base.OnFormClosing(e);
+        }
+
+        protected override void OnFormClosed(FormClosedEventArgs e)
+        {
+            try
+            {
+                _connectGate.Dispose();
+            }
+            catch (ObjectDisposedException ex)
+            {
+                MessageBox.Show(ex.Message);
+            }
+
+            base.OnFormClosed(e);
         }
 
         #endregion

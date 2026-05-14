@@ -179,6 +179,9 @@ namespace ModbusRTU.Communication.Base
             }
         }
 
+        /// <summary>
+        /// 释放串口与 Modbus 资源。调用方须已先通过 <see cref="StopAsync"/> 停止后台 worker（例如窗体 <c>StopSession</c> 中的顺序）。
+        /// </summary>
         public void Dispose()
         {
             _transport.Dispose();

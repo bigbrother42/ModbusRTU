@@ -61,9 +61,11 @@ namespace ModbusRTU.Communication.Base
                 {
                     if (r.Priority != p)
                         continue;
+
                     if (oldest == null || r.CreateTime < oldest.CreateTime)
                         oldest = r;
                 }
+
                 if (oldest != null)
                     return oldest;
             }
@@ -73,6 +75,7 @@ namespace ModbusRTU.Communication.Base
             {
                 if (r.Priority != ModbusPriority.Critical)
                     continue;
+
                 if (oldestCritical == null || r.CreateTime < oldestCritical.CreateTime)
                     oldestCritical = r;
             }
