@@ -1,4 +1,4 @@
-﻿using ModbusRTU.Communication.Base;
+using ModbusRTU.Communication.Base;
 using ModbusRTU.Communication.Base.Serial;
 using ModbusRTU.Constants;
 using ModbusRTU.Model;
@@ -7,11 +7,9 @@ using NModbus;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
-using System.Data;
 using System.Drawing;
 using System.IO.Ports;
 using System.Linq;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -20,19 +18,25 @@ namespace ModbusRTU.View
 {
     public partial class FormMain : Form
     {
+        private const int MaxLogLines = 800;
+
         private ModbusRtuTransport _transport;
         private ModbusScheduler _scheduler;
         private PlcService _deviceService;
         private MultiDevicePoller _poller;
 
-        private readonly PlcDataBuffer _buffer= new PlcDataBuffer(100);
+        private readonly PlcDataBuffer _buffer = new PlcDataBuffer(100);
         private readonly LatestPlcDataCache _latestCache = new LatestPlcDataCache();
 
         private CancellationTokenSource _bufferConsumeCts;
+        private Task _bufferConsumeTask;
 
         private BindingList<PlcData> _plcDataList = new BindingList<PlcData>();
 
         private System.Windows.Forms.Timer _uiTimer;
+
+        private bool _sessionRunning;
+        private bool _isClosing;
 
         public FormMain()
         {
@@ -47,7 +51,6 @@ namespace ModbusRTU.View
 
         private void InitUi()
         {
-            // 打开双缓冲
             this.DoubleBuffered = true;
 
             cmbPort.Items.AddRange(SerialPort.GetPortNames());
@@ -55,12 +58,14 @@ namespace ModbusRTU.View
             if (cmbPort.Items.Count > 0)
                 cmbPort.SelectedIndex = 0;
 
-            cmbBaudRate.Items.AddRange(new object[]{ 9600, 19200, 38400, 115200 });
+            cmbBaudRate.Items.AddRange(new object[] { 9600, 19200, 38400, 115200 });
 
             cmbBaudRate.SelectedItem = 9600;
 
             txtSlaveId.Text = "1";
             txtTargetTemp.Text = "25.0";
+
+            UpdateConnectionButtons();
         }
 
         private void InitGrid()
@@ -69,15 +74,54 @@ namespace ModbusRTU.View
             dataGridView.DataSource = _plcDataList;
         }
 
+        private void UpdateConnectionButtons()
+        {
+            btnConnect.Enabled = !_sessionRunning;
+            btnDisconnect.Enabled = _sessionRunning;
+            cmbPort.Enabled = !_sessionRunning;
+            cmbBaudRate.Enabled = !_sessionRunning;
+            txtSlaveId.Enabled = !_sessionRunning;
+
+            btnStart.Enabled = _sessionRunning;
+            btnStop.Enabled = _sessionRunning;
+            btnSetTemp.Enabled = _sessionRunning;
+
+            if (!_sessionRunning)
+                lblConnectionStatus.Text = "断开";
+        }
+
         #endregion
 
         #region 连接
 
+        private bool TryParseSlaveId(out byte slaveId)
+        {
+            slaveId = 0;
+            if (!byte.TryParse(txtSlaveId.Text.Trim(), out var id) || id < 1 || id > 247)
+                return false;
+            slaveId = id;
+            return true;
+        }
+
+        private bool TryGetSelectedBaudRate(out int baudRate)
+        {
+            baudRate = 0;
+            var sel = cmbBaudRate.SelectedItem;
+            if (sel is int b)
+            {
+                baudRate = b;
+                return true;
+            }
+
+            return int.TryParse(Convert.ToString(sel), out baudRate);
+        }
+
         private void btnTestRead_Click(object sender, EventArgs e)
         {
+            SerialPort port = null;
             try
             {
-                var port = new SerialPort("COM6")
+                port = new SerialPort(cmbPort.Text.Trim())
                 {
                     BaudRate = 9600,
                     DataBits = 8,
@@ -89,72 +133,140 @@ namespace ModbusRTU.View
                     DtrEnable = true,
                 };
 
-                Console.WriteLine(port.IsOpen);
-
                 port.Open();
 
                 var adapter = new SerialPortAdapter(port);
-                var factory = new NModbus.ModbusFactory();
-                var master = factory.CreateRtuMaster(adapter);
+                var factory = new ModbusFactory();
+                using (var master = factory.CreateRtuMaster(adapter))
+                {
+                    master.Transport.ReadTimeout = 3000;
+                    master.Transport.WriteTimeout = 3000;
+                    master.Transport.Retries = 0;
 
-                master.Transport.ReadTimeout = 3000;
-                master.Transport.WriteTimeout = 3000;
-                master.Transport.Retries = 0;
-
-                ushort[] values = master.ReadHoldingRegisters(1, 0, 5);
-
-                MessageBox.Show(string.Join(",", values));
-
-                master.Dispose();
-                port.Close();
+                    ushort[] values = master.ReadHoldingRegisters(1, 0, 5);
+                    MessageBox.Show(string.Join(",", values));
+                }
             }
             catch (Exception ex)
             {
                 MessageBox.Show(ex.ToString());
             }
+            finally
+            {
+                if (port != null)
+                {
+                    if (port.IsOpen) port.Close();
+
+                    port.Dispose();
+                }
+            }
         }
 
-        private void btnConnect_Click(object sender, EventArgs e)
+        private async Task StopSession()
         {
+            _sessionRunning = false;
+
+            if (_poller != null)
+            {
+                await _poller.Stop(waitForExit: true, 2000);
+                _poller = null;
+            }
+
+            _bufferConsumeCts?.Cancel();
+            if (_bufferConsumeTask != null)
+            {
+                Task completed = Task.WhenAny(_bufferConsumeTask, Task.Delay(2000));
+                if (completed != _bufferConsumeTask)
+                {
+                    AppendLogSafe("Consume Buffer停止超时！");
+                }
+            }
+
+            _bufferConsumeTask = null;
+            _bufferConsumeCts?.Dispose();
+            _bufferConsumeCts = null;
+
+            if (_scheduler != null)
+            {
+                _scheduler.Log -= AppendLogSafe;
+                _scheduler.ConnectionChanged -= OnConnectionChanged;
+                await _scheduler.StopAsync(3000);
+                _scheduler.Dispose();
+                _scheduler = null;
+            }
+
+            _transport = null;
+            _deviceService = null;
+
+            if (InvokeRequired)
+                BeginInvoke(new Action(UpdateConnectionButtons));
+            else
+                UpdateConnectionButtons();
+        }
+
+        private async void btnConnect_Click(object sender, EventArgs e)
+        {
+            if (_sessionRunning)
+            {
+                AppendLogSafe("会话已在运行，请先断开。");
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(cmbPort.Text))
+            {
+                AppendLogSafe("请选择串口。");
+                return;
+            }
+
+            if (!TryParseSlaveId(out byte slaveId))
+            {
+                AppendLogSafe("SlaveId 无效，请输入 1～247。");
+                return;
+            }
+
+            if (!TryGetSelectedBaudRate(out int baudRate))
+            {
+                AppendLogSafe("波特率无效。");
+                return;
+            }
+
             try
             {
-                // 1. Transport
+                await StopSession();
+
                 _transport = new ModbusRtuTransport(
-                    portName: cmbPort.Text,
-                    baudRate: Convert.ToInt32(cmbBaudRate.SelectedItem),
+                    portName: cmbPort.Text.Trim(),
+                    baudRate: baudRate,
                     parity: Parity.None,
                     dataBits: 8,
                     stopBits: StopBits.One);
 
-                // 2. Scheduler
                 _scheduler = new ModbusScheduler(_transport);
                 _scheduler.Log += AppendLogSafe;
                 _scheduler.ConnectionChanged += OnConnectionChanged;
 
-                // 3. Service
                 _deviceService = new PlcService(_transport);
 
-                // 4. 多设备配置
                 var devices = new List<DeviceConfig>
                 {
-                    new DeviceConfig { Name = "PLC-1", SlaveId = 1, PollIntervalMs = 100 },
-                    //new DeviceConfig { Name = "温控表-2", SlaveId = 2, PollIntervalMs = 1000 },
-                    //new DeviceConfig { Name = "变频器-3", SlaveId = 3, PollIntervalMs = 800 }
+                    new DeviceConfig { Name = $"PLC-{slaveId}", SlaveId = slaveId, PollIntervalMs = 100 },
                 };
 
-                // 5. Poller
                 _poller = new MultiDevicePoller(devices, _scheduler, _deviceService, _buffer);
 
-                // 6. 启动
                 _scheduler.Start();
                 StartBufferConsumer();
                 _poller.Start();
                 StartUiTimer();
 
+                _sessionRunning = true;
+                UpdateConnectionButtons();
+
                 AppendLogSafe("系统启动成功");
             }
             catch (Exception ex)
             {
+                await StopSession();
                 AppendLogSafe("连接失败：" + ex.Message);
             }
         }
@@ -162,26 +274,22 @@ namespace ModbusRTU.View
         private void StartBufferConsumer()
         {
             _bufferConsumeCts = new CancellationTokenSource();
+            var token = _bufferConsumeCts.Token;
 
-            Task.Run(() =>
+            _bufferConsumeTask = Task.Run(() =>
             {
-                while (!_bufferConsumeCts.Token.IsCancellationRequested)
+                while (!token.IsCancellationRequested)
                 {
-                    if (_buffer.TryTake(out PlcData data))
-                    {
+                    if (_buffer.TryTake(out PlcData data, 100))
                         _latestCache.Update(data);
-                    }
-                    else
-                    {
-                        Thread.Sleep(2);
-                    }
                 }
-            });
+            }, token);
         }
 
         private void StartUiTimer()
         {
-            if (_uiTimer != null) return;
+            if (_uiTimer != null)
+                return;
 
             _uiTimer = new System.Windows.Forms.Timer();
             _uiTimer.Interval = 500;
@@ -212,24 +320,17 @@ namespace ModbusRTU.View
             }
         }
 
-        private void btnDisconnect_Click(object sender, EventArgs e)
+        private async void btnDisconnect_Click(object sender, EventArgs e)
         {
-            if (InvokeRequired)
+            try
             {
-                BeginInvoke(new Action(() =>
-                {
-                    lblConnectionStatus.Text = "断开";
-                }));
+                await StopSession();
+                AppendLogSafe("系统已断开");
             }
-            else
+            catch (Exception ex)
             {
-                lblConnectionStatus.Text = "断开";
+                MessageBox.Show(ex.Message);
             }
-
-            _poller?.Stop();
-            _scheduler?.Dispose();
-
-            AppendLogSafe("系统已断开");
         }
 
         private void OnConnectionChanged(bool connected)
@@ -255,28 +356,46 @@ namespace ModbusRTU.View
 
         private void btnStart_Click(object sender, EventArgs e)
         {
-            EnqueueCritical("启动设备", ct =>
-                _deviceService.StartDeviceAsync(1, ct));
+            if (!TryParseSlaveId(out byte slaveId))
+            {
+                AppendLogSafe("SlaveId 无效。");
+                return;
+            }
+
+            EnqueueCritical("启动设备", slaveId, ct =>
+                _deviceService.StartDeviceAsync(slaveId, ct));
         }
 
         private void btnStop_Click(object sender, EventArgs e)
         {
-            EnqueueCritical("停止设备", ct =>
-                _deviceService.StopDeviceAsync(1, ct));
+            if (!TryParseSlaveId(out byte slaveId))
+            {
+                AppendLogSafe("SlaveId 无效。");
+                return;
+            }
+
+            EnqueueCritical("停止设备", slaveId, ct =>
+                _deviceService.StopDeviceAsync(slaveId, ct));
         }
 
         private void btnSetTemp_Click(object sender, EventArgs e)
         {
             try
             {
+                if (!TryParseSlaveId(out byte slaveId))
+                {
+                    AppendLogSafe("SlaveId 无效。");
+                    return;
+                }
+
                 double temp = double.Parse(txtTargetTemp.Text);
 
                 _scheduler.Enqueue(new ModbusRequest
                 {
                     Name = "设置温度",
-                    SlaveId = 1,
+                    SlaveId = slaveId,
                     Priority = ModbusPriority.High,
-                    ExecuteAsync = ct => _deviceService.SetTemperatureAsync(1, temp, ct)
+                    ExecuteAsync = ct => _deviceService.SetTemperatureAsync(slaveId, temp, ct)
                 });
 
                 AppendLogSafe($"温度设定请求已加入队列：{temp}");
@@ -291,12 +410,18 @@ namespace ModbusRTU.View
 
         #region 请求封装
 
-        private void EnqueueCritical(string name, Func<System.Threading.CancellationToken, System.Threading.Tasks.Task> action)
+        private void EnqueueCritical(string name, byte slaveId, Func<CancellationToken, Task> action)
         {
+            if (_scheduler == null || !_sessionRunning)
+            {
+                AppendLogSafe("未连接，无法发送命令。");
+                return;
+            }
+
             _scheduler.Enqueue(new ModbusRequest
             {
                 Name = name,
-                SlaveId = 1,
+                SlaveId = slaveId,
                 Priority = ModbusPriority.Critical,
                 ExecuteAsync = action
             });
@@ -317,25 +442,47 @@ namespace ModbusRTU.View
             }
 
             txtLog.AppendText($"[{DateTime.Now:HH:mm:ss}] {message}\r\n");
+
+            var lines = txtLog.Lines;
+            if (lines.Length > MaxLogLines)
+            {
+                int skip = lines.Length - MaxLogLines;
+                txtLog.Lines = lines.Skip(skip).ToArray();
+                txtLog.SelectionStart = txtLog.TextLength;
+                txtLog.ScrollToCaret();
+            }
         }
 
         #endregion
 
         #region 关闭
 
-        protected override void OnFormClosing(FormClosingEventArgs e)
+        protected async override void OnFormClosing(FormClosingEventArgs e)
         {
-            _uiTimer?.Stop();
-            _uiTimer = null;
+            if (!_isClosing)
+            {
+                e.Cancel = true;
 
-            _poller?.Stop();
-            _poller = null;
+                try
+                {
+                    _uiTimer?.Stop();
+                    _uiTimer?.Dispose();
+                    _uiTimer = null;
 
-            _bufferConsumeCts?.Cancel();
-            _bufferConsumeCts = null;
+                    await StopSession();
+                }
+                catch (Exception ex)
+                {
 
-            _scheduler?.Dispose();
-            _scheduler = null;
+                }
+                finally
+                {
+                    _isClosing = true;
+                    Close();
+                }
+
+                return;
+            }
 
             base.OnFormClosing(e);
         }

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
@@ -28,6 +28,11 @@ namespace ModbusRTU.Model
         public bool TryTake(out PlcData data)
         {
             return _queue.TryTake(out data);
+        }
+
+        public bool TryTake(out PlcData data, int millisecondsTimeout)
+        {
+            return _queue.TryTake(out data, millisecondsTimeout);
         }
     }
 }

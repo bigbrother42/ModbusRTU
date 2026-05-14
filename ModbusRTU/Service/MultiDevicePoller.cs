@@ -1,10 +1,8 @@
-﻿using ModbusRTU.Communication.Base;
+using ModbusRTU.Communication.Base;
 using ModbusRTU.Constants;
 using ModbusRTU.Model;
 using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -18,6 +16,7 @@ namespace ModbusRTU.Service
         private readonly PlcDataBuffer _buffer;
 
         private CancellationTokenSource _cts;
+        private Task _pollTask;
 
         public MultiDevicePoller(
             List<DeviceConfig> devices,
@@ -33,13 +32,29 @@ namespace ModbusRTU.Service
 
         public void Start()
         {
+            Stop(waitForExit: true);
+
             _cts = new CancellationTokenSource();
-            Task.Run(() => PollLoopAsync(_cts.Token));
+            var token = _cts.Token;
+            _pollTask = Task.Run(() => PollLoopAsync(token));
         }
 
-        public void Stop()
+        public async Task Stop(bool waitForExit = true, int timeoutMs = 2000)
         {
             _cts?.Cancel();
+
+            if (waitForExit && _pollTask != null)
+            {
+                Task completed = await Task.WhenAny(_pollTask, Task.Delay(timeoutMs));
+                if (completed != _pollTask)
+                {
+                    
+                }
+            }
+
+            _pollTask = null;
+            _cts?.Dispose();
+            _cts = null;
         }
 
         private async Task PollLoopAsync(CancellationToken token)
