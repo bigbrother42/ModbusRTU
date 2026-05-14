@@ -37,10 +37,7 @@
             this.btnStart = new System.Windows.Forms.Button();
             this.btnStop = new System.Windows.Forms.Button();
             this.btnSetTemp = new System.Windows.Forms.Button();
-            this.btnTestRead = new System.Windows.Forms.Button();
             this.dataGridView = new System.Windows.Forms.DataGridView();
-            this.txtLog = new System.Windows.Forms.TextBox();
-            this.lblConnectionStatus = new System.Windows.Forms.Label();
             this.DeviceName = new System.Windows.Forms.DataGridViewTextBoxColumn();
             this.SlaveId = new System.Windows.Forms.DataGridViewTextBoxColumn();
             this.Status = new System.Windows.Forms.DataGridViewTextBoxColumn();
@@ -48,6 +45,8 @@
             this.Pressure = new System.Windows.Forms.DataGridViewTextBoxColumn();
             this.Speed = new System.Windows.Forms.DataGridViewTextBoxColumn();
             this.UpdateTime = new System.Windows.Forms.DataGridViewTextBoxColumn();
+            this.txtLog = new System.Windows.Forms.TextBox();
+            this.lblConnectionStatus = new System.Windows.Forms.Label();
             this.SlaveIdLabel = new System.Windows.Forms.Label();
             this.PressureLabel = new System.Windows.Forms.Label();
             this.ComLabel = new System.Windows.Forms.Label();
@@ -135,16 +134,6 @@
             this.btnSetTemp.UseVisualStyleBackColor = true;
             this.btnSetTemp.Click += new System.EventHandler(this.btnSetTemp_Click);
             // 
-            // btnTestRead
-            // 
-            this.btnTestRead.Location = new System.Drawing.Point(23, 415);
-            this.btnTestRead.Name = "btnTestRead";
-            this.btnTestRead.Size = new System.Drawing.Size(81, 23);
-            this.btnTestRead.TabIndex = 11;
-            this.btnTestRead.Text = "btnTestRead";
-            this.btnTestRead.UseVisualStyleBackColor = true;
-            this.btnTestRead.Click += new System.EventHandler(this.btnTestRead_Click);
-            // 
             // dataGridView
             // 
             this.dataGridView.AllowUserToAddRows = false;
@@ -165,23 +154,6 @@
             this.dataGridView.RowTemplate.Height = 23;
             this.dataGridView.Size = new System.Drawing.Size(765, 150);
             this.dataGridView.TabIndex = 12;
-            // 
-            // txtLog
-            // 
-            this.txtLog.Location = new System.Drawing.Point(23, 250);
-            this.txtLog.Multiline = true;
-            this.txtLog.Name = "txtLog";
-            this.txtLog.Size = new System.Drawing.Size(744, 68);
-            this.txtLog.TabIndex = 13;
-            // 
-            // lblConnectionStatus
-            // 
-            this.lblConnectionStatus.AutoSize = true;
-            this.lblConnectionStatus.Location = new System.Drawing.Point(707, 15);
-            this.lblConnectionStatus.Name = "lblConnectionStatus";
-            this.lblConnectionStatus.Size = new System.Drawing.Size(41, 12);
-            this.lblConnectionStatus.TabIndex = 14;
-            this.lblConnectionStatus.Text = "未链接";
             // 
             // DeviceName
             // 
@@ -232,6 +204,23 @@
             this.UpdateTime.Name = "UpdateTime";
             this.UpdateTime.ReadOnly = true;
             // 
+            // txtLog
+            // 
+            this.txtLog.Location = new System.Drawing.Point(23, 250);
+            this.txtLog.Multiline = true;
+            this.txtLog.Name = "txtLog";
+            this.txtLog.Size = new System.Drawing.Size(744, 68);
+            this.txtLog.TabIndex = 13;
+            // 
+            // lblConnectionStatus
+            // 
+            this.lblConnectionStatus.AutoSize = true;
+            this.lblConnectionStatus.Location = new System.Drawing.Point(707, 15);
+            this.lblConnectionStatus.Name = "lblConnectionStatus";
+            this.lblConnectionStatus.Size = new System.Drawing.Size(41, 12);
+            this.lblConnectionStatus.TabIndex = 14;
+            this.lblConnectionStatus.Text = "未链接";
+            // 
             // SlaveIdLabel
             // 
             this.SlaveIdLabel.AutoSize = true;
@@ -280,7 +269,6 @@
             this.Controls.Add(this.lblConnectionStatus);
             this.Controls.Add(this.txtLog);
             this.Controls.Add(this.dataGridView);
-            this.Controls.Add(this.btnTestRead);
             this.Controls.Add(this.btnSetTemp);
             this.Controls.Add(this.btnStop);
             this.Controls.Add(this.btnStart);
@@ -309,7 +297,6 @@
         private System.Windows.Forms.Button btnStart;
         private System.Windows.Forms.Button btnStop;
         private System.Windows.Forms.Button btnSetTemp;
-        private System.Windows.Forms.Button btnTestRead;
         private System.Windows.Forms.DataGridView dataGridView;
         private System.Windows.Forms.TextBox txtLog;
         private System.Windows.Forms.Label lblConnectionStatus;

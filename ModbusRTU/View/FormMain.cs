@@ -116,62 +116,18 @@ namespace ModbusRTU.View
             return int.TryParse(Convert.ToString(sel), out baudRate);
         }
 
-        private void btnTestRead_Click(object sender, EventArgs e)
-        {
-            SerialPort port = null;
-            try
-            {
-                port = new SerialPort(cmbPort.Text.Trim())
-                {
-                    BaudRate = 9600,
-                    DataBits = 8,
-                    Parity = Parity.None,
-                    StopBits = StopBits.One,
-                    ReadTimeout = 3000,
-                    WriteTimeout = 3000,
-                    RtsEnable = true,
-                    DtrEnable = true,
-                };
-
-                port.Open();
-
-                var adapter = new SerialPortAdapter(port);
-                var factory = new ModbusFactory();
-                using (var master = factory.CreateRtuMaster(adapter))
-                {
-                    master.Transport.ReadTimeout = 3000;
-                    master.Transport.WriteTimeout = 3000;
-                    master.Transport.Retries = 0;
-
-                    ushort[] values = master.ReadHoldingRegisters(1, 0, 5);
-                    MessageBox.Show(string.Join(",", values));
-                }
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show(ex.ToString());
-            }
-            finally
-            {
-                if (port != null)
-                {
-                    if (port.IsOpen) port.Close();
-
-                    port.Dispose();
-                }
-            }
-        }
-
         private async Task StopSession()
         {
             _sessionRunning = false;
 
+            // 停止Poller并等待
             if (_poller != null)
             {
                 await _poller.Stop(waitForExit: true, 2000);
                 _poller = null;
             }
 
+            // 取消并等待缓冲消费任务
             _bufferConsumeCts?.Cancel();
             if (_bufferConsumeTask != null)
             {
@@ -186,6 +142,7 @@ namespace ModbusRTU.View
             _bufferConsumeCts?.Dispose();
             _bufferConsumeCts = null;
 
+            // 取消订阅并销毁Scheduler
             if (_scheduler != null)
             {
                 _scheduler.Log -= AppendLogSafe;
@@ -198,6 +155,7 @@ namespace ModbusRTU.View
             _transport = null;
             _deviceService = null;
 
+            // 更新_sessionRunning和按钮状态
             if (InvokeRequired)
                 BeginInvoke(new Action(UpdateConnectionButtons));
             else
@@ -232,6 +190,7 @@ namespace ModbusRTU.View
 
             try
             {
+                // 避免重复链接遗留后台任务
                 await StopSession();
 
                 _transport = new ModbusRtuTransport(
@@ -259,6 +218,7 @@ namespace ModbusRTU.View
                 _poller.Start();
                 StartUiTimer();
 
+                // _sessionRunning为真时，禁用【链接】按钮等，启用【断开】、与设温按钮
                 _sessionRunning = true;
                 UpdateConnectionButtons();
 
@@ -443,6 +403,7 @@ namespace ModbusRTU.View
 
             txtLog.AppendText($"[{DateTime.Now:HH:mm:ss}] {message}\r\n");
 
+            // 超过800行则截掉前面多余行
             var lines = txtLog.Lines;
             if (lines.Length > MaxLogLines)
             {
